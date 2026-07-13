@@ -1,0 +1,73 @@
+name: Update Casks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-casks
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Update casks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/update-casks.py
+
+      - name: Validate cask Ruby syntax
+        shell: bash
+        run: |
+          shopt -s nullglob
+          casks=(Casks/*.rb)
+
+          if (( ${#casks[@]} == 0 )); then
+            echo "No cask files found."
+            exit 1
+          fi
+
+          for cask in "${casks[@]}"; do
+            ruby -c "$cask"
+          done
+
+      - name: Commit updated casks
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git add Casks/
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          mapfile -t casks < <(git diff --cached --name-only -- Casks/)
+
+          if (( ${#casks[@]} == 1 )); then
+            cask_name="${casks[0]##*/}"
+            cask_name="${cask_name%.rb}"
+            version="$(sed -n 's/^[[:space:]]*version[[:space:]]*"\([^"]*\)".*/\1/p' "${casks[0]}" | head -n 1)"
+            if [[ -z "$version" ]]; then
+              echo "Unable to determine the updated cask version."
+              exit 1
+            fi
+            commit_message="chore(cask): update ${cask_name} to ${version}"
+          else
+            commit_message="chore(cask): update Homebrew casks"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "$commit_message"
+          git push
