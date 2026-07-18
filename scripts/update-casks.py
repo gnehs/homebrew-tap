@@ -26,11 +26,23 @@ CASKS_DIR = ROOT / "Casks"
 SEMVER_RE = re.compile(r"^v?(?P<version>\d+\.\d+\.\d+)$")
 VERSION_FIELD_RE = re.compile(r'(?m)^(?P<prefix>\s*version\s+)"[^"\n]+"(?P<suffix>\s*)$')
 SHA256_FIELD_RE = re.compile(r'(?m)^(?P<prefix>\s*sha256\s+)"[^"\n]+"(?P<suffix>\s*)$')
+MULTI_ARCH_SHA256_FIELD_RE = re.compile(
+    r'(?m)^(?P<prefix>\s*sha256\s+arm:\s+)"[^"\n]+"'
+    r'(?P<separator>,\s*\n\s*intel:\s+)"[^"\n]+"(?P<suffix>\s*)$'
+)
 URL_FIELD_RE = re.compile(
     r'(?m)^(?P<prefix>\s*url\s+)"(?P<url>[^"\n]+)"(?P<suffix>,?\s*)$'
 )
+ARCH_FIELD_RE = re.compile(
+    r'(?m)^\s*arch\s+arm:\s+"(?P<arm>[^"\n]+)",\s*'
+    r'intel:\s+"(?P<intel>[^"\n]+)"\s*$'
+)
 CURRENT_VERSION_RE = re.compile(r'(?m)^\s*version\s+"(?P<value>[^"]+)"\s*$')
 CURRENT_SHA256_RE = re.compile(r'(?m)^\s*sha256\s+"(?P<value>[^"]+)"\s*$')
+CURRENT_MULTI_ARCH_SHA256_RE = re.compile(
+    r'(?m)^\s*sha256\s+arm:\s+"(?P<arm>[^"]+)",\s*\n\s*'
+    r'intel:\s+"(?P<intel>[^"]+)"\s*$'
+)
 CURRENT_URL_RE = re.compile(r'(?m)^\s*url\s+"(?P<value>[^"]+)"')
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -56,6 +68,16 @@ APPS = [
         "token": "moss-transcribe-studio",
         "repository": "gnehs/moss-transcribe-tauri",
         "asset_strategy": "unique_dmg",
+    },
+    {
+        "token": "bearwarden",
+        "repository": "gnehs/BearWarden",
+        "asset_strategy": "multi_arch_versioned",
+        "asset_templates": {
+            "arm": "bearwarden-{version}-arm64.dmg",
+            "intel": "bearwarden-{version}-x64.dmg",
+        },
+        "cask_arches": {"arm": "arm64", "intel": "x64"},
     },
 ]
 
@@ -168,7 +190,10 @@ def select_asset(app: dict[str, Any], release: dict[str, Any], version: str) -> 
             f"Expected {description} for {app['token']}, found {len(matching)}"
         )
 
-    asset = matching[0]
+    return release_asset_from_api(asset=matching[0], app=app)
+
+
+def release_asset_from_api(asset: dict[str, Any], app: dict[str, Any]) -> ReleaseAsset:
     name = asset.get("name")
     size = asset.get("size")
     download_url = asset.get("browser_download_url")
@@ -180,6 +205,40 @@ def select_asset(app: dict[str, Any], release: dict[str, Any], version: str) -> 
         raise UpdateError(f"Release asset {name!r} for {app['token']} has no download URL")
     validate_download_url(download_url, app["repository"])
     return ReleaseAsset(name=name, size=size, download_url=download_url)
+
+
+def select_multi_arch_assets(
+    app: dict[str, Any], release: dict[str, Any], version: str
+) -> dict[str, ReleaseAsset]:
+    raw_assets = release.get("assets")
+    if not isinstance(raw_assets, list) or not all(
+        isinstance(asset, dict) for asset in raw_assets
+    ):
+        raise UpdateError(f"Release for {app['token']} has invalid assets")
+
+    templates = app.get("asset_templates")
+    if not isinstance(templates, dict):
+        raise UpdateError(f"Multi-arch app {app['token']} has invalid asset templates")
+    expected_names: dict[str, str] = {}
+    for architecture in ("arm", "intel"):
+        template = templates.get(architecture)
+        if not isinstance(template, str):
+            raise UpdateError(
+                f"Multi-arch app {app['token']} has no {architecture} asset template"
+            )
+        expected_names[architecture] = template.format(version=version)
+    if len(set(expected_names.values())) != len(expected_names):
+        raise UpdateError(f"Multi-arch app {app['token']} has duplicate asset templates")
+
+    selected: dict[str, ReleaseAsset] = {}
+    for architecture, expected_name in expected_names.items():
+        matching = [asset for asset in raw_assets if asset.get("name") == expected_name]
+        if len(matching) != 1:
+            raise UpdateError(
+                f"Expected asset {expected_name!r} for {app['token']}, found {len(matching)}"
+            )
+        selected[architecture] = release_asset_from_api(asset=matching[0], app=app)
+    return selected
 
 
 def validate_download_url(download_url: str, repository: str) -> None:
@@ -242,6 +301,10 @@ def evaluate_url(url_expression: str, version: str) -> str:
     return url_expression.replace("#{version}", version)
 
 
+def evaluate_multi_arch_url(url_expression: str, version: str, architecture: str) -> str:
+    return evaluate_url(url_expression, version).replace("#{arch}", architecture)
+
+
 def replace_field(pattern: re.Pattern[str], content: str, value: str, field: str) -> str:
     replacement_count = 0
 
@@ -253,6 +316,25 @@ def replace_field(pattern: re.Pattern[str], content: str, value: str, field: str
     updated = pattern.sub(replace, content, count=1)
     if replacement_count != 1:
         raise UpdateError(f"Cask has an invalid or duplicated {field} field")
+    return updated
+
+
+def replace_multi_arch_sha256(
+    content: str, sha256: dict[str, str]
+) -> str:
+    replacement_count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal replacement_count
+        replacement_count += 1
+        return (
+            f'{match.group("prefix")}"{sha256["arm"]}"'
+            f'{match.group("separator")}"{sha256["intel"]}"{match.group("suffix")}'
+        )
+
+    updated = MULTI_ARCH_SHA256_FIELD_RE.sub(replace, content, count=1)
+    if replacement_count != 1:
+        raise UpdateError("Cask has an invalid or duplicated multi-arch sha256 field")
     return updated
 
 
@@ -270,6 +352,75 @@ def validate_cask_text(
         raise UpdateError(f"Updated Cask {token} has an invalid sha256")
     if len(url_matches) != 1 or evaluate_url(url_matches[0].group("value"), version) != expected_url:
         raise UpdateError(f"Updated Cask {token} URL does not match the release asset")
+
+
+def parse_multi_arch_cask(
+    path: Path, token: str, cask_arches: dict[str, str]
+) -> tuple[str, str, dict[str, str], str]:
+    if not path.is_file():
+        raise UpdateError(f"Cask not found: {path}")
+    content = path.read_text(encoding="utf-8")
+    version, sha256, url_expression = parse_multi_arch_cask_text(
+        content, token, cask_arches, str(path)
+    )
+    return content, version, sha256, url_expression
+
+
+def parse_multi_arch_cask_text(
+    content: str, token: str, cask_arches: dict[str, str], cask_name: str
+) -> tuple[str, dict[str, str], str]:
+    version_matches = list(CURRENT_VERSION_RE.finditer(content))
+    sha_matches = list(CURRENT_MULTI_ARCH_SHA256_RE.finditer(content))
+    url_matches = list(CURRENT_URL_RE.finditer(content))
+    arch_matches = list(ARCH_FIELD_RE.finditer(content))
+    if len(version_matches) != 1:
+        raise UpdateError(f"Cask {cask_name} must have exactly one parseable version field")
+    if len(sha_matches) != 1:
+        raise UpdateError(
+            f"Cask {cask_name} must have exactly one parseable multi-arch sha256 field"
+        )
+    if len(url_matches) != 1:
+        raise UpdateError(f"Cask {cask_name} must have exactly one parseable url field")
+    if len(arch_matches) != 1:
+        raise UpdateError(f"Cask {cask_name} must have exactly one parseable arch field")
+    version_match = version_matches[0]
+    sha_match = sha_matches[0]
+    arch_match = arch_matches[0]
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version_match.group("value")):
+        raise UpdateError(f"Cask {cask_name} has an invalid explicit version")
+    sha256 = {"arm": sha_match.group("arm"), "intel": sha_match.group("intel")}
+    if not all(SHA256_RE.fullmatch(value) for value in sha256.values()):
+        raise UpdateError(f"Cask {cask_name} has an invalid multi-arch sha256 field")
+    if {"arm": arch_match.group("arm"), "intel": arch_match.group("intel")} != cask_arches:
+        raise UpdateError(f"Cask {cask_name} has unexpected multi-arch values")
+    if f'cask "{token}"' not in content:
+        raise UpdateError(f"Cask {cask_name} does not declare token {token!r}")
+    return version_match.group("value"), sha256, url_matches[0].group("value")
+
+
+def validate_multi_arch_cask_text(
+    content: str,
+    token: str,
+    version: str,
+    sha256: dict[str, str],
+    assets: dict[str, ReleaseAsset],
+    cask_arches: dict[str, str],
+) -> None:
+    parsed_version, parsed_sha256, url_expression = parse_multi_arch_cask_text(
+        content, token, cask_arches, token
+    )
+    if parsed_version != version:
+        raise UpdateError(f"Updated Cask {token} has an invalid version")
+    if parsed_sha256 != sha256:
+        raise UpdateError(f"Updated Cask {token} has an invalid multi-arch sha256")
+    for architecture, asset in assets.items():
+        if (
+            evaluate_multi_arch_url(url_expression, version, cask_arches[architecture])
+            != asset.download_url
+        ):
+            raise UpdateError(
+                f"Updated Cask {token} URL does not match the {architecture} release asset"
+            )
 
 
 def validate_ruby_syntax(content: str, token: str) -> None:
@@ -297,6 +448,8 @@ def prepare_update(app: dict[str, Any]) -> UpdateResult:
     repository = app["repository"]
     release = api_request(repository)
     version = parse_version(release["tag_name"], repository)
+    if app["asset_strategy"] == "multi_arch_versioned":
+        return prepare_multi_arch_update(app, release, version)
     asset = select_asset(app, release, version)
     sha256 = download_sha256(asset)
     path = CASKS_DIR / f"{token}.rb"
@@ -313,6 +466,46 @@ def prepare_update(app: dict[str, Any]) -> UpdateResult:
         updated = replace_field(URL_FIELD_RE, updated, asset.download_url, "url")
 
     validate_cask_text(updated, token, version, sha256, asset.download_url)
+    validate_ruby_syntax(updated, token)
+    return UpdateResult(
+        token=token,
+        old_version=old_version,
+        new_version=version,
+        changed=changed,
+        content=updated,
+        path=path,
+    )
+
+
+def prepare_multi_arch_update(
+    app: dict[str, Any], release: dict[str, Any], version: str
+) -> UpdateResult:
+    token = app["token"]
+    cask_arches = app.get("cask_arches")
+    if not isinstance(cask_arches, dict) or set(cask_arches) != {"arm", "intel"} or not all(
+        isinstance(value, str) and value for value in cask_arches.values()
+    ):
+        raise UpdateError(f"Multi-arch app {token} has invalid Cask architectures")
+    assets = select_multi_arch_assets(app, release, version)
+    sha256 = {
+        architecture: download_sha256(asset)
+        for architecture, asset in assets.items()
+    }
+    path = CASKS_DIR / f"{token}.rb"
+    content, old_version, old_sha256, _ = parse_multi_arch_cask(
+        path, token, cask_arches
+    )
+    changed = old_version != version or old_sha256 != sha256
+
+    updated = content
+    if old_version != version:
+        updated = replace_field(VERSION_FIELD_RE, updated, version, "version")
+    if old_sha256 != sha256:
+        updated = replace_multi_arch_sha256(updated, sha256)
+
+    validate_multi_arch_cask_text(
+        updated, token, version, sha256, assets, cask_arches
+    )
     validate_ruby_syntax(updated, token)
     return UpdateResult(
         token=token,
