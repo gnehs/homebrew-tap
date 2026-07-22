@@ -1,9 +1,9 @@
 cask "bearwarden" do
   arch arm: "arm64", intel: "x64"
 
-  version "0.1.9"
-  sha256 arm:   "0ace18ee2a93f18be9f1b4c84b54fc5a41592a89bc88d899cd14f19d153d91eb",
-         intel: "62db199c0000f209d1270a71c924ad7efb446ad2c76d092ac6166763c53ad9fd"
+  version "0.1.10"
+  sha256 arm:   "0e27241ad081cffa5786f21a8a2ceebbf6ad95580fe7ccb5ffa84578a8a7e336",
+         intel: "bdcb6bf34f79d70605648ee06fb704e6cf9986e8b27365a7d38a2455a45a17e3"
 
   url "https://github.com/gnehs/BearWarden/releases/download/#{version}/bearwarden-#{version}-#{arch}.dmg",
       verified: "github.com/gnehs/BearWarden/"
