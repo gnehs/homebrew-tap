@@ -1,6 +1,6 @@
 cask "subtitle-translator-electron" do
-  version "2.0.1"
-  sha256 "ededf1c29780ffefe941b2b41ccf5db98b28346731d80e2d557cbbbc715cc2c5"
+  version "2.0.2"
+  sha256 "0fcca4c37289b11866c451ed1124d4bacb0ab6eda6d11ea8e097f5f272a1cc28"
 
   url "https://github.com/gnehs/subtitle-translator-electron/releases/download/#{version}/subtitle-translator_#{version}.dmg"
   name "Subtitle Translator"
