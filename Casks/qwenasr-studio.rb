@@ -1,6 +1,6 @@
 cask "qwenasr-studio" do
-  version "0.1.3"
-  sha256 "51b15d04ce28d0f32e678ac814d82ed946764465379012772f10bc14e725b231"
+  version "0.1.4"
+  sha256 "720d21e083ea7f1ae8ebf83aacb6ff2232da6214f5b496df5212d7be5e674b63"
 
   url "https://github.com/gnehs/QwenASR-tauri/releases/download/#{version}/QwenASR.Studio_#{version}_aarch64.dmg",
       verified: "github.com/gnehs/QwenASR-tauri/"
