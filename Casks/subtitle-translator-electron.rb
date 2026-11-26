@@ -16,9 +16,9 @@ cask "subtitle-translator-electron" do
 
   app "Subtitle Translator.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args:         ["-dr", "com.apple.quarantine", "#{appdir}/Subtitle Translator.app"],
-                   must_succeed: false
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:         ["-dr", "com.apple.quarantine", "{{appdir}}/Subtitle Translator.app"],
+        must_succeed: false
   end
 end
